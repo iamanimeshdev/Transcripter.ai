@@ -1,0 +1,18 @@
+# Environment variables
+.env
+.env.*
+
+# Node.js dependencies
+node_modules/
+
+# Chrome / Chromium profile data
+chrome-profile/
+chrome-profile/**
+chrome_user_data/
+User Data/
+Default/
+Profile*/
+
+# OS junk (optional but recommended)
+.DS_Store
+Thumbs.db

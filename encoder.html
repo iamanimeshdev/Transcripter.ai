@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Encode Hidden Message in PNG</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- ✅ CryptoJS for AES + SHA256 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+
+  <style>
+    body { background:#f8f9fa; }
+    .container { max-width: 900px; margin-top: 2rem; }
+    #canvasbox canvas {
+      max-width: 100%;
+      border:1px solid #dee2e6;
+      border-radius:.375rem;
+      margin-top:1rem;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+
+  <h2 class="text-center mb-4">🖼️ Encode Message Into PNG (AES + LSB)</h2>
+
+  <!-- Upload PNG -->
+  <div class="card mb-3">
+    <div class="card-body">
+      <label class="form-label">1. Choose PNG Image</label>
+      <input type="file" class="form-control" id="encodeImageInput" accept="image/png">
+    </div>
+  </div>
+
+  <!-- Message + Password -->
+  <div class="card mb-3">
+    <div class="card-body">
+
+      <label class="form-label">2. Enter Secret Message</label>
+      <textarea class="form-control" id="secretText" rows="4" placeholder="Write something to hide..."></textarea>
+
+      <label class="form-label mt-3">3. Password (default: ISAA)</label>
+      <input type="text" class="form-control" id="passwordInput" placeholder="Password">
+    </div>
+  </div>
+
+  <!-- Preview -->
+  <div class="card mb-3">
+    <div class="card-body text-center" id="canvasbox">
+      <p class="text-muted m-0">Image preview will appear here</p>
+    </div>
+  </div>
+
+  <!-- Encode button -->
+  <div class="d-grid mb-4">
+    <button id="encodeBtn" class="btn btn-success btn-lg">Encode & Download</button>
+  </div>
+
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+
+  const encodeImageInput = document.getElementById("encodeImageInput");
+  const encodeBtn = document.getElementById("encodeBtn");
+  const secretText = document.getElementById("secretText");
+  const passwordInput = document.getElementById("passwordInput");
+  const canvasBox = document.getElementById("canvasbox");
+
+  let canvas, ctx, originalImage;
+
+  // Create canvas
+  function getCanvas() {
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      canvasBox.innerHTML = "";
+      canvasBox.appendChild(canvas);
+      ctx = canvas.getContext("2d", { willReadFrequently: true });
+    }
+    return { canvas, ctx };
+  }
+
+  // Load PNG to canvas
+  encodeImageInput.addEventListener("change", () => {
+    const file = encodeImageInput.files[0];
+    if (!file) return alert("Please select a PNG image.");
+
+    const reader = new FileReader();
+    reader.onload = e => {
+      originalImage = new Image();
+      originalImage.onload = () => {
+        const { canvas, ctx } = getCanvas();
+        canvas.width = originalImage.width;
+        canvas.height = originalImage.height;
+        ctx.drawImage(originalImage, 0, 0);
+      };
+      originalImage.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // -------- AES ENCRYPT (RAW BYTES) ---------
+
+  // Convert CryptoJS WordArray to Uint8Array
+  function wordArrayToU8(wordArray) {
+    const len = wordArray.sigBytes;
+    const u8 = new Uint8Array(len);
+    let offset = 0;
+
+    for (let i = 0; i < wordArray.words.length; i++) {
+      const word = wordArray.words[i];
+      const bytes = Math.min(4, len - offset);
+      if (bytes === 0) break;
+
+      if (bytes >= 1) u8[offset++] = (word >>> 24) & 0xFF;
+      if (bytes >= 2) u8[offset++] = (word >>> 16) & 0xFF;
+      if (bytes >= 3) u8[offset++] = (word >>> 8) & 0xFF;
+      if (bytes >= 4) u8[offset++] = word & 0xFF;
+    }
+    return u8;
+  }
+
+  // ✅ EXACT same AES logic as Node.js (returns raw bytes)
+  function aesEncryptRaw(message, passphrase) {
+    const key = CryptoJS.SHA256(passphrase);
+    const iv = CryptoJS.lib.WordArray.random(16);
+
+    const encrypted = CryptoJS.AES.encrypt(
+      CryptoJS.enc.Utf8.parse(message),
+      key,
+      { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+    );
+
+    const ivBytes     = wordArrayToU8(iv);
+    const cipherBytes = wordArrayToU8(encrypted.ciphertext);
+
+    const combined = new Uint8Array(ivBytes.length + cipherBytes.length);
+    combined.set(ivBytes, 0);
+    combined.set(cipherBytes, ivBytes.length);
+
+    return combined;   // ✅ raw bytes (NOT base64)
+  }
+
+  // -------- LSB ENCODING (RAW BINARY) ---------
+
+  function embedRawLSB(rawBytes) {
+    const { canvas, ctx } = getCanvas();
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = img.data;
+
+    const messageLength = rawBytes.length;
+    
+    // Prefix: 4-byte length
+    const lenBuf = new Uint8Array(4);
+    new DataView(lenBuf.buffer).setUint32(0, messageLength, false);
+
+    const payload = new Uint8Array(4 + messageLength);
+    payload.set(lenBuf, 0);
+    payload.set(rawBytes, 4);
+
+    const bitsNeeded = payload.length * 8;
+    const bitsAvailable = canvas.width * canvas.height * 3;
+
+    if (bitsNeeded > bitsAvailable) {
+      alert("Message too large for this image.");
+      return false;
+    }
+
+    let bitIndex = 0;
+
+    for (const byte of payload) {
+      for (let b = 7; b >= 0; b--) {
+        const bit = (byte >> b) & 1;
+
+        const pixelIdx = Math.floor(bitIndex / 3);
+        const channel = bitIndex % 3; // RGB only
+
+        const dataIdx = pixelIdx * 4 + channel;
+        data[dataIdx] = (data[dataIdx] & 0xFE) | bit;
+
+        bitIndex++;
+      }
+    }
+
+    ctx.putImageData(img, 0, 0);
+    return true;
+  }
+
+  // -------- CLICK TO ENCODE ---------
+
+  encodeBtn.addEventListener("click", () => {
+
+    if (!originalImage) return alert("Upload a PNG first.");
+    if (!secretText.value.trim()) return alert("Enter a message.");
+
+    const passphrase = passwordInput.value.trim() || "ISAA";
+
+    // Encrypt to raw bytes
+    const rawEncrypted = aesEncryptRaw(secretText.value.trim(), passphrase);
+
+    // Embed into PNG
+    if (!embedRawLSB(rawEncrypted)) return;
+
+    // Download output PNG
+    const link = document.createElement("a");
+    link.download = "encoded.png";
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+
+    alert("✅ Message successfully encoded!");
+  });
+
+});
+</script>
+
+</body>
+</html>
