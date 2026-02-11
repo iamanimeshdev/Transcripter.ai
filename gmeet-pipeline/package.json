@@ -1,0 +1,21 @@
+{
+    "name": "transcript-ai-gmeet",
+    "version": "1.0.0",
+    "description": "GMeet caption + audio transcription pipeline",
+    "type": "module",
+    "scripts": {
+        "gmeet": "node gmeet.js"
+    },
+    "dependencies": {
+        "@google/generative-ai": "^0.24.1",
+        "@sendgrid/mail": "^8.1.6",
+        "axios": "^1.13.1",
+        "dotenv": "^17.2.3",
+        "fluent-ffmpeg": "^2.1.3",
+        "playwright": "^1.55.0",
+        "playwright-core": "^1.56.1",
+        "pngjs": "^7.0.0",
+        "sharp": "^0.34.4",
+        "uuid": "^11.1.0"
+    }
+}

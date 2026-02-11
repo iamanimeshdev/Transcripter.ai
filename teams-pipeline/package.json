@@ -1,0 +1,19 @@
+{
+    "name": "transcript-ai-teams",
+    "version": "1.0.0",
+    "description": "Teams caption-based transcription pipeline",
+    "type": "module",
+    "scripts": {
+        "teams": "node teams.js",
+        "teams1": "node teams1.js"
+    },
+    "dependencies": {
+        "@google/generative-ai": "^0.24.1",
+        "@sendgrid/mail": "^8.1.6",
+        "axios": "^1.13.1",
+        "dotenv": "^17.2.3",
+        "playwright": "^1.55.0",
+        "pngjs": "^7.0.0",
+        "sharp": "^0.34.4"
+    }
+}

@@ -1,0 +1,7 @@
+node_modules/
+chrome-profile/
+audio_chunks/
+transcripts/
+*.wav
+*.mp3
+.env
