@@ -1,161 +1,187 @@
-// teams.js — Teams caption bot (converted to ESM)
+// teams_bot.js
 import { chromium } from "playwright";
+import { finalizeAndProduceImage } from "./utils/finalize.js";
 import dotenv from "dotenv";
 dotenv.config();
 
+// ── Parse CLI args ──
+function getArg(name) {
+  const idx = process.argv.indexOf(`--${name}`);
+  return idx !== -1 && process.argv[idx + 1] ? process.argv[idx + 1] : null;
+}
+
+const rawUrl = getArg("url");
+const EMAIL_OVERRIDE = getArg("email");
+
+if (!rawUrl) {
+  console.error("❌ Usage: node teams.js --url <teams-meeting-url> [--email <recipient>]");
+  process.exit(1);
+}
+
+// Ensure URL has webjoin=true
+const MEETING_URL = rawUrl.includes("webjoin=true")
+  ? rawUrl
+  : (rawUrl.includes("?") ? `${rawUrl}&webjoin=true` : `${rawUrl}?webjoin=true`);
+
+
+// Override EMAIL_TO if --email is provided
+if (EMAIL_OVERRIDE) {
+  process.env.EMAIL_TO = EMAIL_OVERRIDE;
+}
+
 (async () => {
-    const browser = await chromium.launch({
-        headless: false,
-        args: [
-            "--disable-features=ExternalProtocolDialog",
-            "--use-fake-device-for-media-stream",
-            "--use-fake-ui-for-media-stream"
-        ]
-    });
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      "--disable-features=ExternalProtocolDialog",
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream"
+    ]
+  });
 
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    page.setDefaultTimeout(0);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  page.setDefaultTimeout(0);
 
-    console.log(">> Navigating to meeting...");
-    await page.goto("https://teams.live.com/meet/9322545022766?p=kWlFIxYSL31rHN5lub&webjoin=true");
+  console.log(`>> Opening meeting: ${MEETING_URL}`);
+  await page.goto(MEETING_URL);
 
-    // Wait for the name input field
-    await page.waitForSelector('input[type="text"]');
-    await page.fill('input[type="text"]', "Transcript Bot");
+  await page.waitForSelector('input[type="text"]');
+  await page.fill('input[type="text"]', "Transcript Bot");
 
-    // Disable audio (try multiple approaches)
-    try {
-        await page.getByRole("radio", { name: /Don't use audio/i }).check();
-    } catch (err) {
-        console.warn(">> Could not find 'Don't use audio' option — continuing anyway.");
+  try { await page.getByRole("radio", { name: /Don't use audio/i }).check(); } catch { }
+
+  await page.click('button:has-text("Join now")');
+  await page.waitForSelector('[data-cid="call-screen-wrapper"]');
+
+  console.log("✅ Joined meeting.");
+
+  // Enable captions
+  try {
+    await page.locator('#callingButtons-showMoreBtn').click();
+    await page.getByRole("menuitem", { name: /Captions/i }).click();
+  } catch {
+    console.log("⚠️ Could not auto-enable captions.");
+  }
+
+  // Transcript logic
+  let transcript = "";
+  let recording = true;
+  let lastCaption = Date.now();
+
+  await page.exposeFunction("onNewCaption", (author, caption) => {
+    lastCaption = Date.now();
+
+    const lower = caption.toLowerCase();
+    if (lower.includes("stop recording")) {
+      console.log("⛔ Stop command received.");
+      finish();
+      return;
     }
 
-    // Join meeting
-    console.log(">> Joining meeting...");
-    await page.click('button:has-text("Join now")');
-
-    // Wait for meeting UI
-    await page.waitForSelector('[data-cid="call-screen-wrapper"]');
-    console.log(">> Logged in and meeting joined.");
-
-    // Open the "More" menu (retry if needed)
-    console.log(">> Opening 'More' menu...");
-    try {
-        await page.locator('#callingButtons-showMoreBtn').click({ timeout: 10000 });
-    } catch (err) {
-        console.warn(">> Primary 'More' button not found, trying fallback...");
-        const buttons = await page.getByRole('button', { name: /More/i }).all();
-        if (buttons.length > 0) await buttons[0].click();
-        else throw new Error("Could not find any 'More' button to click.");
+    if (recording) {
+      const line = `${author}: ${caption}`;
+      transcript += line + "\n";
+      console.log(line);
     }
+  });
 
-    // Enable captions
-    try {
-        await page.getByRole("menuitem", { name: /Captions/i }).click({ timeout: 5000 });
-        console.log(">> Captions enabled. Waiting for first caption...");
-    } catch (err) {
-        console.warn(">> Could not enable captions automatically.");
-    }
+  // Improved mutation observer with better stability detection
+  await page.evaluate(() => {
+    const captionTrackers = new Map();
 
-    // Transcript + state
-    let transcript = "";
-    let recording = true;
-    let lastCaptionTime = Date.now();
+    function trackCaption(captionEl, authorEl) {
+      // Create unique identifier for this caption element
+      const id = Math.random().toString(36);
 
-    // Callback for each caption
-    await page.exposeFunction("onNewCaption", (author, caption) => {
-        lastCaptionTime = Date.now();
-        const lower = caption.toLowerCase();
+      let lastText = captionEl.innerText;
+      let stableCount = 0;
+      const requiredStableChecks = 3; // Must be stable for 3 consecutive checks
+      const checkInterval = 800; // Increased from 500ms
 
-        if (lower.includes("pause recording")) {
-            recording = false;
-            console.log(">> Recording paused.");
-            return;
-        }
-        if (lower.includes("start recording")) {
-            recording = true;
-            console.log(">> Recording resumed.");
-            return;
-        }
-        if (lower.includes("stop recording")) {
-            console.log(">> Recording stopped by voice command.");
-            console.log("\n=== Transcript ===\n");
-            console.log(transcript.trim());
-            process.exit(0);
-        }
+      const tracker = {
+        author: authorEl?.innerText.trim() || "Unknown",
+        element: captionEl,
+        interval: setInterval(() => {
+          const currentText = captionEl.innerText.trim();
 
-        if (recording) {
-            const entry = `${author}: ${caption}`;
-            transcript += entry + "\n";
-            console.log(entry);
-        }
-    });
+          // Check if text has changed
+          if (currentText === lastText && currentText.length > 0) {
+            stableCount++;
 
-    // Inject MutationObserver
-    await page.evaluate(() => {
-        const seen = new Set();
+            // Only capture after multiple stable checks
+            if (stableCount >= requiredStableChecks) {
+              clearInterval(tracker.interval);
+              captionTrackers.delete(id);
 
-        function waitUntilStable(el, authorEl, callback, delay = 500) {
-            let last = el.innerText;
-            let timer;
-            const check = () => {
-                const now = el.innerText;
-                if (now === last) {
-                    const author = authorEl ? authorEl.innerText.trim() : "Unknown";
-                    callback(author, now);
-                } else {
-                    last = now;
-                    timer = setTimeout(check, delay);
-                }
-            };
-            timer = setTimeout(check, delay);
-        }
-
-        const observer = new MutationObserver(mutations => {
-            for (const mutation of mutations) {
-                for (const node of mutation.addedNodes) {
-                    if (!(node instanceof HTMLElement)) continue;
-                    const captionEl = node.querySelector?.('span[data-tid="closed-caption-text"]');
-                    const authorEl = node.querySelector?.('span[data-tid="author"]');
-
-                    if (captionEl) {
-                        waitUntilStable(captionEl, authorEl, (author, caption) => {
-                            const entry = `${author}: ${caption}`;
-                            if (!seen.has(entry)) {
-                                seen.add(entry);
-                                window.onNewCaption(author, caption);
-                            }
-                        });
-                    }
-                }
+              // Final check: ensure element still exists and hasn't been replaced
+              if (document.body.contains(captionEl)) {
+                window.onNewCaption(tracker.author, currentText);
+              }
             }
-        });
+          } else {
+            // Text changed, reset stability counter
+            stableCount = 0;
+            lastText = currentText;
+          }
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-            characterData: true
-        });
+          // Safety: clear after 10 seconds regardless
+          if (Date.now() - tracker.startTime > 10000) {
+            clearInterval(tracker.interval);
+            captionTrackers.delete(id);
+            if (currentText.length > 0 && document.body.contains(captionEl)) {
+              window.onNewCaption(tracker.author, currentText);
+            }
+          }
+        }, checkInterval),
+        startTime: Date.now()
+      };
+
+      captionTrackers.set(id, tracker);
+    }
+
+    const obs = new MutationObserver(mutations => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node instanceof HTMLElement) {
+            const captionEl = node.querySelector('span[data-tid="closed-caption-text"]');
+            const authorEl = node.querySelector('span[data-tid="author"]');
+
+            if (captionEl) {
+              trackCaption(captionEl, authorEl);
+            }
+          }
+        }
+      }
     });
 
-    // Inactivity timeout
-    const checkInactivity = setInterval(async () => {
-        if (Date.now() - lastCaptionTime > 10 * 60 * 1000) {
-            console.log(">> No captions for 10 minutes. Leaving meeting.");
-            console.log("\n=== Transcript ===\n");
-            console.log(transcript.trim());
-            clearInterval(checkInactivity);
-            await browser.close();
-            process.exit(0);
-        }
-    }, 60 * 1000);
+    obs.observe(document.body, { childList: true, subtree: true });
+  });
 
-    // Detect meeting ended
-    await page.waitForSelector("text=Enjoy your call? Join Teams today for free", { timeout: 0 });
-    console.log("\n>> Meeting ended. Final transcript:\n");
-    console.log(transcript.trim());
+  // 10-min timeout
+  const timer = setInterval(() => {
+    if (Date.now() - lastCaption > 10 * 60 * 1000) finish();
+  }, 60000);
 
-    clearInterval(checkInactivity);
+  let isFinishing = false;
+  async function finish() {
+    if (isFinishing) return;
+    isFinishing = true;
+
+    clearInterval(timer);
+    await finalizeAndProduceImage(transcript);
     await browser.close();
+    process.exit(0);
+  }
+
+  try {
+    await page.waitForSelector("text=Enjoy your call? Join Teams today for free", { timeout: 0 });
+    finish();
+  } catch (err) {
+    if (err.message.includes("Target page, context or browser has been closed")) {
+      console.log(">> Browser closed. Finishing...");
+    } else {
+      console.error(">> Error waiting for meeting end:", err.message);
+    }
+  }
 })();

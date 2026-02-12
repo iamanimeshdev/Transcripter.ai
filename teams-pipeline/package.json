@@ -4,14 +4,16 @@
     "description": "Teams caption-based transcription pipeline",
     "type": "module",
     "scripts": {
-        "teams": "node teams.js",
-        "teams1": "node teams1.js"
+        "start": "node server.js",
+        "teams": "node teams.js"
     },
     "dependencies": {
         "@google/generative-ai": "^0.24.1",
         "@sendgrid/mail": "^8.1.6",
         "axios": "^1.13.1",
+        "cors": "^2.8.5",
         "dotenv": "^17.2.3",
+        "express": "^5.1.0",
         "playwright": "^1.55.0",
         "pngjs": "^7.0.0",
         "sharp": "^0.34.4"

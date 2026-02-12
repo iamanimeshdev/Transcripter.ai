@@ -14,7 +14,7 @@ export async function summarizeWithGemini(transcript) {
   const prompt = `
 You are a professional Minutes of Meeting (MoM) taker.
 Analyze the following meeting transcript(Transcript is the captions so it might be noisy and error-prone so correct it too) and generate well-structured Minutes of Meeting.
-Context: this meeting is about sales and target achieved and need to be completed in a pharmaceutical company.
+Context: This is a general meeting. Identify the topic, domain, and purpose from the transcript itself.
 The minutes should include:
 
 Meeting Title
